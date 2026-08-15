@@ -112,10 +112,19 @@ export default class FormProduct<P, S> extends FormExtended<FormProductProps,For
   }
 
   updateBaseUnitPhysical(changedValues: any) {
-    const map: any = { length: 'base_length', width: 'base_width', height: 'base_height', weight: 'base_weight' };
+    const map: any = { length: 'base_length', width: 'base_width', height: 'base_height', weight: 'base_weight', net_weight: 'base_net_weight' };
     const out: any = {};
     Object.keys(changedValues).forEach((key) => { out[map[key] ?? key] = changedValues[key]; });
     this.updateRecord(out);
+  }
+
+  // Gross minus net is the sales packaging - the bag or bucket the goods never leave. Nothing
+  // stores it, so showing it back is the only way a typo in either figure becomes visible.
+  salesPackagingWeight(physical: any): number | null {
+    const gross = parseFloat(physical.weight);
+    const net = parseFloat(physical.net_weight);
+    if (!isFinite(gross) || !isFinite(net) || gross <= 0 || net <= 0) return null;
+    return gross - net;
   }
 
   packageVolume(physical: any): number {
@@ -125,7 +134,8 @@ export default class FormProduct<P, S> extends FormExtended<FormProductProps,For
     return [length, width, height].every((value) => isFinite(value) && value > 0) ? length * width * height : 0;
   }
 
-  renderPhysicalFields(physical: any, onFieldChange: (changedValues: any) => void, dimensions: string[] = ['length', 'width', 'height'], showWeight: boolean = true, showNote: boolean = true): React.JSX.Element {
+  // baseUnit shows gross + net of the goods, tare shows the weight of the empty container
+  renderPhysicalFields(physical: any, onFieldChange: (changedValues: any) => void, dimensions: string[] = ['length', 'width', 'height'], weightFields: 'baseUnit' | 'tare' | 'none' = 'baseUnit', showNote: boolean = true): React.JSX.Element {
     const numberField = (field: string, label: string, unit: string) => <div>
       <label className='text-sm text-gray-500'>{this.translate(label)} ({unit})</label>
       <Int
@@ -136,14 +146,31 @@ export default class FormProduct<P, S> extends FormExtended<FormProductProps,For
     </div>;
     const dimensionLabels: any = { length: 'Length', width: 'Width', height: 'Height' };
     const volume = this.packageVolume(physical);
-    return <div className='grid grid-cols-4 gap-2 mt-1'>
+    const salesPackaging = this.salesPackagingWeight(physical);
+    // gross + net make five fields next to three dimensions, so the row widens instead of wrapping
+    const fieldCount = dimensions.length + (weightFields === 'baseUnit' ? 2 : weightFields === 'tare' ? 1 : 0);
+    const gridClass = fieldCount >= 5 ? 'grid-cols-5' : 'grid-cols-4';
+    const fullRowClass = fieldCount >= 5 ? 'col-span-5' : 'col-span-4';
+    return <div className={'grid ' + gridClass + ' gap-2 mt-1'}>
       {dimensions.map((field) => <React.Fragment key={field}>{numberField(field, dimensionLabels[field], 'm')}</React.Fragment>)}
-      {showWeight ? numberField('weight', 'Weight', 'kg') : null}
-      <div className='col-span-4 text-sm text-gray-500'>
+      {weightFields === 'baseUnit' ? numberField('weight', 'Gross weight', 'kg') : null}
+      {weightFields === 'baseUnit' ? numberField('net_weight', 'Net weight', 'kg') : null}
+      {weightFields === 'tare' ? numberField('weight', 'Tare weight (empty)', 'kg') : null}
+      {dimensions.length > 0 ? <div className={fullRowClass + ' text-sm text-gray-500'}>
         {this.translate('Volume')}: <span className='font-bold'>{volume > 0 ? globalThis.hubleto.numberFormat(volume, 4) : '—'}</span> m³
         <span className='ml-1'>({this.translate('length × width × height')})</span>
-      </div>
-      {showNote ? <div className='col-span-4'>
+      </div> : null}
+      {/* the number stays on screen when it goes negative - how far below zero is the size of the typo */}
+      {weightFields === 'baseUnit' && salesPackaging !== null ? <div className={fullRowClass + ' flex items-center gap-2'}>
+        <div className='text-sm text-gray-500'>
+          {this.translate('Sales packaging')}: <span className='font-bold'>{globalThis.hubleto.numberFormat(salesPackaging, 4)}</span> kg
+          <span className='ml-1'>({this.translate('gross − net')})</span>
+        </div>
+        {salesPackaging < 0 ? <div className='badge badge-danger'>
+          {this.translate('Net weight is higher than gross weight.')}
+        </div> : null}
+      </div> : null}
+      {showNote ? <div className={fullRowClass}>
         <label className='text-sm text-gray-500'>{this.translate('Package note')}</label>
         <Varchar
           value={physical.description}
@@ -158,27 +185,35 @@ export default class FormProduct<P, S> extends FormExtended<FormProductProps,For
     const symbol = this.baseUnitSymbol();
     const editBaseUnit = (changedValues: any) => this.updateBaseUnitPhysical(changedValues);
     const physical: any = {
-      length: record.base_length, width: record.base_width, height: record.base_height, weight: record.base_weight,
+      length: record.base_length, width: record.base_width, height: record.base_height,
+      weight: record.base_weight, net_weight: record.base_net_weight,
     };
     let body: React.JSX.Element;
 
     switch (this.baseUnitMeasureType()) {
       case FormProduct.MEASURE_MASS:
-        body = note(this.translate('Measured by weight - one') + ' ' + symbol + ' ' + this.translate('has no fixed shape. Put the real box or bag size on a packaging level below.'));
+        // one kg weighs one kg, so nothing to enter - the warehouse derives the load from the quantity
+        body = note(this.translate('Measured by weight - one') + ' ' + symbol + ' ' + this.translate('has no fixed shape and weighs 1 kg, so warehouse load comes straight from the quantity. Put the real box or bag size on a packaging level below.'));
         break;
       case FormProduct.MEASURE_VOLUME:
-        body = note(this.translate('Measured by volume - one') + ' ' + symbol + ' ' + this.translate('has no fixed shape. Put the real container size on a packaging level below.'));
+        body = <>
+          {note(this.translate('Measured by volume - one') + ' ' + symbol + ' ' + this.translate('has no fixed shape. Put the real container size on a packaging level below.'))}
+          <p className='text-sm text-gray-500 mt-2'>
+            {this.translate('Weight cannot be derived from volume, so give the weight of one') + ' ' + symbol + ' ' + this.translate('or the warehouse counts this product as weightless.')}
+          </p>
+          {this.renderPhysicalFields(physical, editBaseUnit, [], 'baseUnit', false)}
+        </>;
         break;
       case FormProduct.MEASURE_LENGTH:
         body = <>
           <p className='text-sm text-gray-500 mb-2'>
             {this.translate('Measured by length - one') + ' ' + symbol + ' ' + this.translate('is 1 m long, so give its cross-section and weight per') + ' ' + symbol + '.'}
           </p>
-          {this.renderPhysicalFields({ ...physical, length: 1 }, editBaseUnit, ['width', 'height'], true, false)}
+          {this.renderPhysicalFields({ ...physical, length: 1 }, editBaseUnit, ['width', 'height'], 'baseUnit', false)}
         </>;
         break;
       default: // MEASURE_COUNT
-        body = this.renderPhysicalFields(physical, editBaseUnit, ['length', 'width', 'height'], true, false);
+        body = this.renderPhysicalFields(physical, editBaseUnit, ['length', 'width', 'height'], 'baseUnit', false);
         break;
     }
 
@@ -338,7 +373,8 @@ export default class FormProduct<P, S> extends FormExtended<FormProductProps,For
                     <tr className={item._toBeDeleted_ ? 'bg-red-100' : ''}>
                       <td></td>
                       <td colSpan={4}>
-                        {this.renderPhysicalFields(item, (changedValues: any) => this.updatePackaging(realIndex, item, changedValues), ['length', 'width', 'height'], false)}
+                        {/* the tare field is hidden until something reads it - see ProductPackaging.weight */}
+                        {this.renderPhysicalFields(item, (changedValues: any) => this.updatePackaging(realIndex, item, changedValues), ['length', 'width', 'height'], 'none')}
                       </td>
                     </tr>
                   </React.Fragment>;
