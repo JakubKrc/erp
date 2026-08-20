@@ -29,9 +29,8 @@ class ProductPackaging extends \Hubleto\Erp\Model
       'height' => (new Decimal($this, $this->translate('Height')))->setUnit('m'),
       // What a STANDARD container of this level weighs empty for this product - a default to copy
       // onto a new container, not a value anything looks up later. A container's own tare has to be
-      // its own, because a mixed one holds several products. Nothing reads this yet, so the form
-      // hides it; see the receive-in-packaging-units item in the Warehouses to-do.
-      'weight' => (new Decimal($this, $this->translate('Standard tare weight')))->setUnit('kg')
+      // its own, because a mixed one holds several products.
+      'weight' => (new Decimal($this, $this->translate('Tare weight for this product')))->setUnit('kg')
         ->setDescription($this->translate('What an empty container of this level normally weighs for this product.')),
       'description' => (new Text($this, $this->translate('Package description'))),
     ]);

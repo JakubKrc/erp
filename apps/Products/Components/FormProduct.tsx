@@ -45,6 +45,7 @@ export default class FormProduct<P, S> extends FormExtended<FormProductProps,For
     return {
       ...super.getStateFromProps(props),
       unitsById: this.state?.unitsById ?? {},
+      unitTareById: this.state?.unitTareById ?? {},
       tabs: [
         { uid: 'default', title: <b>{this.translate('Product')}</b> },
         { uid: 'packaging', title: this.translate('Packaging') },
@@ -63,14 +64,27 @@ export default class FormProduct<P, S> extends FormExtended<FormProductProps,For
       {},
       (data: any) => {
         const nameById: any = {};
-        Object.keys(data ?? {}).forEach((id) => { nameById[id] = data[id]?._LOOKUP ?? ''; });
-        this.setState({ unitsById: nameById });
+        const tareById: any = {};
+        Object.keys(data ?? {}).forEach((id) => {
+          nameById[id] = data[id]?._LOOKUP ?? '';
+          tareById[id] = parseFloat(data[id]?.tare_weight);
+        });
+        this.setState({ unitsById: nameById, unitTareById: tareById });
       }
     );
   }
 
   unitName(id: any): string {
     return (id && this.state.unitsById) ? (this.state.unitsById[id] ?? '') : '';
+  }
+
+  // What one empty container of this level weighs: the per-product value, or the container type's default.
+  packagingOwnTare(item: any): number | null {
+    const ownWeight = parseFloat(item.weight);
+    if (isFinite(ownWeight) && ownWeight > 0) return ownWeight;
+    const unitTare = this.state.unitTareById ? this.state.unitTareById[item.id_unit] : null;
+    if (isFinite(unitTare) && unitTare > 0) return unitTare;
+    return null;
   }
 
   // What the base unit measures (count/mass/volume/length); the symbol it shows (pcs/kg/l/m).
@@ -155,7 +169,7 @@ export default class FormProduct<P, S> extends FormExtended<FormProductProps,For
       {dimensions.map((field) => <React.Fragment key={field}>{numberField(field, dimensionLabels[field], 'm')}</React.Fragment>)}
       {weightFields === 'baseUnit' ? numberField('weight', 'Gross weight', 'kg') : null}
       {weightFields === 'baseUnit' ? numberField('net_weight', 'Net weight', 'kg') : null}
-      {weightFields === 'tare' ? numberField('weight', 'Tare weight (empty)', 'kg') : null}
+      {weightFields === 'tare' ? numberField('weight', 'Tare weight for this product', 'kg') : null}
       {dimensions.length > 0 ? <div className={fullRowClass + ' text-sm text-gray-500'}>
         {this.translate('Volume')}: <span className='font-bold'>{volume > 0 ? globalThis.hubleto.numberFormat(volume, 4) : '—'}</span> m³
         <span className='ml-1'>({this.translate('length × width × height')})</span>
@@ -163,7 +177,7 @@ export default class FormProduct<P, S> extends FormExtended<FormProductProps,For
       {/* the number stays on screen when it goes negative - how far below zero is the size of the typo */}
       {weightFields === 'baseUnit' && salesPackaging !== null ? <div className={fullRowClass + ' flex items-center gap-2'}>
         <div className='text-sm text-gray-500'>
-          {this.translate('Sales packaging')}: <span className='font-bold'>{globalThis.hubleto.numberFormat(salesPackaging, 4)}</span> kg
+          {this.translate('Sales packaging tare')}: <span className='font-bold'>{globalThis.hubleto.numberFormat(salesPackaging, 4)}</span> kg
           <span className='ml-1'>({this.translate('gross − net')})</span>
         </div>
         {salesPackaging < 0 ? <div className='badge badge-danger'>
@@ -287,6 +301,28 @@ export default class FormProduct<P, S> extends FormExtended<FormProductProps,For
         });
         const formatBaseUnits = (value: number) => globalThis.hubleto.numberFormat(value, Number.isInteger(value) ? 0 : 2);
 
+        // A full container weighs its own packaging plus everything nested inside it. The base unit is
+        // not counted - its wrapper is already inside the base unit gross weight.
+        let runningTare: number | null = 0;
+        const cumulativeTares = containers.map(({ item }: any, position: number) => {
+          if (item._toBeDeleted_) return null;
+          const ownTare = this.packagingOwnTare(item);
+          const qtyPerPackage = parseFloat(item.qty_per_lower);
+          if (runningTare === null || ownTare === null) { runningTare = null; return null; }
+          if (position === 0) { runningTare = ownTare; return runningTare; }
+          if (!isFinite(qtyPerPackage) || qtyPerPackage <= 0) { runningTare = null; return null; }
+          runningTare = ownTare + qtyPerPackage * runningTare;
+          return runningTare;
+        });
+
+        // What a full container of this level puts on the scale - the same sum a location's weight uses.
+        const baseUnitGross = parseFloat(R.base_weight);
+        const grossWeights = containers.map((entry: any, position: number) => {
+          if (baseUnitCounts[position] == null || cumulativeTares[position] == null) return null;
+          if (!isFinite(baseUnitGross) || baseUnitGross <= 0) return null;
+          return baseUnitCounts[position] * baseUnitGross + cumulativeTares[position];
+        });
+
         return <>
           {this.renderBaseUnitCard(R)}
           <hr className='my-4'/>
@@ -373,8 +409,16 @@ export default class FormProduct<P, S> extends FormExtended<FormProductProps,For
                     <tr className={item._toBeDeleted_ ? 'bg-red-100' : ''}>
                       <td></td>
                       <td colSpan={4}>
-                        {/* the tare field is hidden until something reads it - see ProductPackaging.weight */}
-                        {this.renderPhysicalFields(item, (changedValues: any) => this.updatePackaging(realIndex, item, changedValues), ['length', 'width', 'height'], 'none')}
+                        {this.renderPhysicalFields(item, (changedValues: any) => this.updatePackaging(realIndex, item, changedValues), ['length', 'width', 'height'], 'tare')}
+                        {grossWeights[position] != null ? <div className='text-sm text-gray-500 mt-1'>
+                          {this.translate('Full container weighs')}: <span className='font-bold'>{globalThis.hubleto.numberFormat(grossWeights[position], 4)}</span> kg
+                          <span className='ml-1'>
+                            ({formatBaseUnits(baseUnitCounts[position])} {baseUnitName} × {globalThis.hubleto.numberFormat(baseUnitGross, 4)} kg
+                            + {globalThis.hubleto.numberFormat(cumulativeTares[position], 4)} kg {this.translate('tare')})
+                          </span>
+                        </div> : cumulativeTares[position] != null ? <div className='text-sm text-gray-500 mt-1'>
+                          {this.translate('Tare incl. inner packaging')}: <span className='font-bold'>{globalThis.hubleto.numberFormat(cumulativeTares[position], 4)}</span> kg
+                        </div> : null}
                       </td>
                     </tr>
                   </React.Fragment>;

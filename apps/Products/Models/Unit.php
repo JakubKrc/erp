@@ -25,7 +25,7 @@ class Unit extends \Hubleto\Erp\Model
     return array_merge(parent::describeColumns(), [
       'name' => (new Varchar($this, $this->translate("Name")))->setRequired()->setDefaultVisible()->setIcon(self::COLUMN_NAME_DEFAULT_ICON),
       // shared default, so a euro pallet's 25 kg is entered once instead of per product
-      'tare_weight' => (new Decimal($this, $this->translate('Tare weight')))->setUnit('kg')->setDefaultVisible()
+      'tare_weight' => (new Decimal($this, $this->translate('Standard tare weight')))->setUnit('kg')->setDefaultVisible()
         ->setDescription($this->translate('Weight of this container when empty. A product can override it on its own packaging level.')),
     ]);
   }
