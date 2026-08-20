@@ -33,7 +33,7 @@ class Unit extends \Hubleto\Erp\Model
   public function describeTable(): \Hubleto\Framework\Description\Table
   {
     $description = parent::describeTable();
-    $description->ui["addButtonText"] = $this->translate("Add unit");
+    $description->ui["addButtonText"] = $this->translate("Add packaging unit");
     $description->show(['header', 'fulltextSearch', 'columnSearch', 'moreActionsButton']);
     $description->hide(['footer']);
     return $description;
